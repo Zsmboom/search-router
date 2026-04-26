@@ -1,58 +1,155 @@
 ---
 name: search-router
-description: Unified Search Routing Layer (Multi-Provider). Routes queries to best-performing search API (Tavily/Serper/Exa), auto-rotates keys on 429/403, and provides a unified output format. Trigger: 搜索/网络查询/search
+description: |
+  统一搜索路由层。核心解决的问题：skill 太多，不知道用哪个搜索工具。
+  当用户说"搜索XXX"/"帮我查一下"/"网络查询"时，加载此 skill 并执行搜索路由。
+  支持 Tavily/Serper/Exa/Brave 四个 Provider，自动 key 轮换，智能路由。
+triggers:
+  - "搜索"
+  - "帮我查一下"
+  - "网络查询"
+  - "搜索一下"
+  - "查一下"
+  - "search"
 ---
 
-# Search Router — Skill Definition
+# Search Router — 统一搜索路由
 
-## What It Does
+## 解决的问题
 
-Intelligent search router that:
-1. Routes queries to the best-performing search API based on query type
-2. Auto-rotates API keys on 429/403 errors
-3. Falls back to next provider when current one is exhausted
-4. Provides a unified output format across all providers
+用 AI Agent 时，最烦的不是"搜不到"，而是"该用哪个搜索工具"。
 
-**Supported Providers:** Tavily · Serper · Exa
+Tavily 搜新闻快，Serper 拿来查 Google 排名，Exa 适合深度研究——每种场景各有好用的工具，但来回切换、记 API Key、管理配额，累。
+
+Search Router 就是来解决这个问题的：**你只管搜，剩下的它帮你安排。**
 
 ---
 
-## Architecture
+## 核心能力
+
+- **智能路由** — 根据查询类型自动选最优 Provider
+- **Key 自动轮换** — 429/403 时自动换下一个 Key，不卡壳
+- **多 Provider 级联** — 主 Provider 失效，自动降级到下一个
+- **统一输出格式** — 不管用哪个 Provider，返回结构都一样
+
+---
+
+## 支持的搜索场景
+
+| 场景 | 推荐 Provider | 说明 |
+|------|-------------|------|
+| 最新新闻 / 快讯 | Tavily → Exa | 速度优先 |
+| 深度研究 / 学术 | Exa → Tavily | 全面优先 |
+| Google SERP 快照 | Serper | 接近 Google 原始结果 |
+| 竞品分析 | Serper → Exa | 多维度抓取 |
+| 通用查询 | Tavily → Exa → Serper → Brave | 默认级联 |
+
+---
+
+## 快速使用
+
+### 第一步：配置 API Key
+
+```bash
+cd ~/.hermes/skills/research/search-router
+cp config.json.template config.json
+# 编辑 config.json，填入你的 Key
+```
+
+支持四个 Provider，按需启用：
+
+| Provider | Key 获取 | 免费额度 |
+|----------|---------|---------|
+| **Tavily** | [tavily.com](https://tavily.com) | 1000次/天 |
+| **Serper** | [serper.dev](https://serper.dev) | 2500次/月 |
+| **Exa** | [exa.ai](https://exa.ai) | 1000次/月 |
+| **Brave** | [brave.com/search/api](https://brave.com/search/api) | 2000次/月 |
+
+### 第二步：搜索
+
+```python
+import sys
+sys.path.insert(0, "/path/to/search-router")
+from router import SearchRouter
+
+router = SearchRouter()
+
+# 通用搜索（自动路由）
+result = router.search("MiniMax 最新模型发布", num_results=10)
+print(f"使用: {result['provider']}")
+for r in result["results"]:
+    print(f"  {r['title']}: {r['url']}")
+
+# 指定场景（显式路由）
+result = router.search("AI Agent 组织落地趋势", query_type="research", num_results=10)
+
+# 获取所有 Provider 结果对比
+results = router.search_with_fallback("搜索工具对比")
+for r in results:
+    print(f"[{r['provider']}] {r['total']}条结果, 耗时{r['latency_ms']}ms")
+```
+
+### 第三步：查看 Provider 状态
+
+```python
+status = router.provider_status()
+print(status)
+# 看到某个 Provider 的 key 用尽，可以运行时添加新 key:
+router.add_provider_key("tavily", "新key")
+router.save_config()
+```
+
+---
+
+## Key 轮换逻辑（发生了什么）
 
 ```
-User Query
-    │
-    ▼
-SearchRouter.search(query, query_type)
-    │
-    ├─→ routing config → ordered provider list
-    │
-    ├─→ TavilyProvider.search()
-    │       ├─ 200 → return unified result
-    │       └─ 429/403 → rotate key, retry (max retries × keys)
-    │
-    ├─→ SerperProvider.search()  (fallback)
-    │       └─ same key rotation logic
-    │
-    └─→ ExaProvider.search()     (final fallback)
-            └─ same key rotation logic
+你的请求
+    ↓
+SearchRouter 查路由表，决定用 Tavily
+    ↓
+Tavily 用当前 Key 发请求
+    ↓
+├── 成功 (200) → 返回结果，结束
+├── Key 过期 (401/403) → 自动换下一个 Key，重试
+├── 频率限制 (429) → 自动换下一个 Key，重试
+└── 其他错误 → 换 Key，重试
+    ↓
+所有 Key 用尽 → 标记 Tavily 失效，降级到 Exa
+    ↓
+Exa 同上流程...
+    ↓
+全部失效 → 返回空结果
 ```
+
+每个 Provider 可以配置多个 Key，轮换是自动的，你不需要管。
 
 ---
 
-## Unified Output Format
+## 与其他工具的区别
 
-All providers return the same structure:
+| | Search Router | 单 Provider | 手动切换 |
+|---|---|---|---|
+| **配置一次** | ✅ 多个 Key 自动轮换 | ❌ Key 用尽要手动换 | ❌ 每个工具都要配 |
+| **智能路由** | ✅ 按场景选最优 | ❌ 什么场景都用同一个 | ❌ 要记哪个场景用哪个 |
+| **自动降级** | ✅ 主 Provider 失效自动切 | ❌ 失败就停了 | ❌ 要自己判断 |
+| **统一格式** | ✅ 换 Provider 不改代码 | ✅ | ❌ 每种格式要单独解析 |
+
+---
+
+## 技术细节
+
+**统一返回格式：**
 
 ```json
 {
   "provider": "tavily",
-  "query": "AI news today",
+  "query": "搜索词",
   "results": [
     {
-      "title": "Article Title",
-      "url": "https://example.com/article",
-      "snippet": "Brief description...",
+      "title": "文章标题",
+      "url": "https://example.com",
+      "snippet": "摘要内容...",
       "date": "2026-04-07",
       "score": null
     }
@@ -62,218 +159,65 @@ All providers return the same structure:
 }
 ```
 
----
+**Provider 支持情况：**
 
-## Query Types & Routing
-
-| Query Type | Provider Order | Best For |
-|------------|---------------|----------|
-| `news` | Tavily → Exa → Serper | Latest news, fast facts |
-| `research` | Exa → Tavily → Serper | Deep research, long-form |
-| `deep` | Exa → Tavily | Comprehensive analysis |
-| `google-serp` | Serper → Exa | Google SERP snapshots |
-| `competitor` | Serper → Exa | Competitive analysis |
-| `default` | Tavily → Exa → Serper | General queries |
+- **Tavily**：综合搜索，速度快，支持新闻场景
+- **Serper**：Google SERP 近似结果，适合 SEO 和竞品分析
+- **Exa**：深度全文检索，支持 `search_with_contents()` 获取文章完整内容
+- **Brave**：隐私优先的搜索，适合通用查询
 
 ---
 
-## API Keys Configuration
+## 项目地址
 
-### Method 1: config.json (persistent)
-
-Edit `~/.hermes/skills/research/search-router/config.json`:
-
-```json
-{
-  "providers": {
-    "tavily": {
-      "enabled": true,
-      "keys": ["tvly-key-1", "tvly-key-2"],
-      "current_key_index": 0,
-      "max_retries_per_key": 2
-    },
-    "serper": {
-      "enabled": true,
-      "keys": ["serper-key-1"],
-      "current_key_index": 0
-    },
-    "exa": {
-      "enabled": true,
-      "keys": ["exa-key-1"],
-      "current_key_index": 0
-    }
-  }
-}
-```
-
-### Method 2: Environment Variables (runtime injection)
+**GitHub：** [https://github.com/Zsmboom/search-router](https://github.com/Zsmboom/search-router)
 
 ```bash
-export SEARCH_TAVILY_KEYS="key1,key2"
-export SEARCH_SERPER_KEYS="key1"
-export SEARCH_EXA_KEYS="key1"
+# Clone
+git clone https://github.com/Zsmboom/search-router.git
+cd search-router
+
+# 配置 Key
+cp config.json.template config.json
+# 编辑 config.json 填入你的 API keys
+
+# 安装依赖
+pip install requests
+
+# 使用
+python router.py "搜索词" [场景] [结果数]
 ```
 
-### Method 3: Programmatic (runtime)
+---
 
+## 使用场景示例
+
+**场景 1：竞品动态监控**
 ```python
-router = SearchRouter()
-router.add_provider_key("tavily", "new-key")
-router.save_config()  # persist
+router.search("Notion AI 最新功能", query_type="competitor")
 ```
 
----
-
-## Usage
-
-### Python API
-
+**场景 2：技术趋势研究**
 ```python
-import sys
-sys.path.insert(0, "~/.hermes/skills/research/search-router")
-
-from router import SearchRouter
-
-# Initialize
-router = SearchRouter()
-
-# Basic search (uses default routing)
-result = router.search("Nvidia latest news", num_results=10)
-print(f"Provider: {result['provider']}")
-for r in result["results"]:
-    print(f"  - {r['title']}: {r['url']}")
-
-# Typed search (explicit routing)
-result = router.search("AI research trends", query_type="research", num_results=10)
-
-# Get results from all providers (comparison mode)
-results = router.search_with_fallback("keyword analysis", query_type="default")
-for r in results:
-    print(f"[{r['provider']}] {r['total']} results, {r['latency_ms']}ms")
-
-# Check provider status
-status = router.provider_status()
-print(status)
-
-# Add key at runtime
-router.add_provider_key("tavily", "new-key-here")
-router.save_config()
+router.search("small AI model 2026", query_type="research")
 ```
 
-### Shell / CLI
-
-```bash
-cd ~/.hermes/skills/research/search-router
-
-# Set keys in environment
-export SEARCH_TAVILY_KEYS="tvly-key-1,tvly-key-2"
-export SEARCH_EXA_KEYS="6afd1e56-878a-4993-8fea-bfe69afe00d5"
-
-# Run from skills directory
-python router.py "AI news" news 10
-```
-
----
-
-## Adding New Providers
-
-> ⚠️ **Perplexity provider 已废弃**（额度耗尽），示例仅保留结构参考。
-
-To add a new search provider (e.g. new_provider):
-
-1. Create `providers/new_provider.py`:
-
+**场景 3：突发新闻**
 ```python
-class NewProviderProvider:
-    name = "new_provider"
-
-    def __init__(self, keys: list, config: dict):
-        self.keys = keys
-        ...
-
-    def search(self, query: str, num_results: int = 10, **kwargs):
-        # Return same unified format:
-        return {
-            "provider": self.name,
-            "query": query,
-            "results": [...],
-            "total": len(results),
-            "latency_ms": ms,
-        }
+router.search("英伟达发布会", query_type="news")
 ```
 
-2. Update `router.py`:
+**场景 4：通用查询（不用记用什么）**
 ```python
-from .providers.new_provider import NewProviderProvider
-
-PROVIDER_CLASSES = {
-    "tavily": TavilyProvider,
-    "serper": SerperProvider,
-    "exa": ExaProvider,
-    "new_provider": NewProviderProvider,  # add here
-}
-```
-
-3. Update `config.json`: add `"new_provider"` entry in `providers` and `routing` sections.
-
----
-
-## Key Rotation Logic
-
-```
-For each provider:
-  1. Try current key
-  2. Success (200) → return result
-  3. Auth error (401/403) → rotate key immediately
-  4. Rate limit (429) → rotate key
-  5. Other error → rotate key
-  6. All keys exhausted → mark provider dead, try next provider
-```
-
-Rotation is per-provider and stateful — `current_key_index` persists across calls.
-
----
-
-## Tavily Multi-Key Support
-
-Tavily currently has 2 keys configured. The router tracks each key's index separately and rotates on any error (429/403/4xx).
-
-To check which key is currently active:
-```python
-status = router.provider_status()
-print(status["tavily"]["current_key_index"])
+router.search("iPhone 17 配置曝光")
+# 自动走默认路由：Tavily → Exa → Serper → Brave
 ```
 
 ---
 
-## Dependencies
+## 注意事项
 
-```
-requests
-```
-
-Install: `pip install requests`
-
----
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `SKILL.md` | This file — skill definition |
-| `config.json` | API keys + routing configuration |
-| `router.py` | Main SearchRouter class + CLI |
-| `providers/__init__.py` | Provider package init |
-| `providers/tavily.py` | Tavily API implementation |
-| `providers/serper.py` | Serper API implementation |
-| `providers/exa.py` | Exa API implementation |
-
----
-
-## Notes
-
-- Keys are stored in `config.json` in plain text — do not commit this file to version control
-- Tavily does not expose quota via API; track usage manually via logs or provider_status
-- Exa `search_with_contents()` method available for deep/full-text retrieval (higher latency)
-- Serper supports image search via `search_images()` method
-- All providers have independent key pools — rotating one does not affect others
+- `config.json` 包含敏感 Key，已加入 .gitignore，切勿提交到 Git
+- 各 Provider 的 Key 池独立，轮换互不影响
+- Exa 的 `search_with_contents()` 可获取全文，但延迟更高
+- Serper 支持 `search_images()` 图片搜索方法
