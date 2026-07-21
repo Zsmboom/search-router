@@ -2,25 +2,7 @@
 
 多 Provider 统一搜索路由层。**你只管搜，路由、降级、Key 轮换全自动。**
 
-> 纯 Python 3 实现，零 Agent 框架依赖。Hermes Agent、OpenClaw、Codex CLI、Claude Code、任何能跑 Python 3 的进程都能用。
-
----
-
-## 目录
-
-- [解决的问题](#解决的问题)
-- [快速开始](#快速开始)
-- [API Key 获取](#api-key-获取)
-- [使用方式](#使用方式)
-- [支持哪些 Agent](#支持哪些-agent)
-- [路由规则](#路由规则)
-- [Key 轮换逻辑](#key-轮换逻辑)
-- [环境变量注入](#环境变量注入)
-- [API 参考](#api-参考)
-- [统一输出格式](#统一输出格式)
-- [添加新 Provider](#添加新-provider)
-- [文件结构](#文件结构)
-- [注意事项](#注意事项)
+> 纯 Python 3 实现，零 Agent 框架依赖。任何能跑 Python 3 的 Agent 都能用。
 
 ---
 
@@ -86,16 +68,6 @@ cp config.json.template config.json
 
 > ⚠️ `config.json` 已加入 `.gitignore`，**切勿提交**。
 
-### 4. 试试
-
-```bash
-# Shell 直接搜
-python router.py "AI Agent trends"
-
-# 指定场景
-python router.py "MiniMax 最新模型" news 10
-```
-
 ---
 
 ## API Key 获取
@@ -107,82 +79,103 @@ python router.py "MiniMax 最新模型" news 10
 | **Exa** | [exa.ai](https://exa.ai) | 1000次/月 | 深度研究、长文检索、学术 |
 | **Brave** | [brave.com/search/api](https://brave.com/search/api) | 2000次/月 | 通用搜索、隐私优先场景 |
 
-**最少配一个就能用**（Tavily 推荐首选）。配多个有级联容灾——Tavily 用尽自动切 Exa，Exa 用尽自动切 Serper。
+**最少配一个就能用**（Tavily 推荐首选）。配多个有级联容灾——Tavily 用尽自动切 Exa。
 
 ---
 
-## 使用方式
+## 在 Agent 中使用
 
-### 方式 1：Shell 直接调用（最简）
+### Hermes Agent
+
+作为 skill 加载后自动路由，或通过 terminal 调用：
 
 ```bash
-# 通用搜索（自动路由）
-python router.py "搜索词"
+# 作为 skill 触发（加载 search-router skill 后）
+# 说"搜索XXX"即可自动进入路由
 
-# 指定场景 + 结果数量
-python router.py "搜索词" research 10
-python router.py "搜索词" news 5
-python router.py "搜索词" competitor 20
-
-# 参数：<query> [query_type] [num_results]
-# query_type: news | research | deep | google-serp | competitor | default
+# 或直接 terminal 调用
+python ~/.hermes/skills/research/search-router/router.py "搜索词"
+python ~/.hermes/skills/research/search-router/router.py "搜索词" research 10
 ```
 
-### 方式 2：Python import（推荐，灵活可控）
+```python
+# execute_code 中 import 使用
+import sys
+sys.path.insert(0, "~/.hermes/skills/research/search-router")
+from router import SearchRouter
+
+router = SearchRouter()
+result = router.search("AI Agent trends", query_type="research", num_results=10)
+print(result["results"])
+```
+
+### OpenClaw 子 Agent
+
+子 Agent 里直接通过 terminal 调用，纯 Python 脚本无框架依赖：
+
+```bash
+python ~/.hermes/skills/research/search-router/router.py "搜索词" research 10
+```
+
+或 clone 到项目目录后：
+
+```python
+from router import SearchRouter
+
+router = SearchRouter()
+result = router.search("搜索词", query_type="research")
+```
+
+### Codex CLI / Claude Code
+
+纯 Python 调用，先 `pip install requests`，然后：
+
+```bash
+# Shell 搜索
+python /path/to/search-router/router.py "搜索词" news 10
+
+# 或 Python 内联
+python -c "
+from router import SearchRouter
+r = SearchRouter()
+res = r.search('搜索词', query_type='research')
+for r in res['results']:
+    print(f'{r[\"title\"]}: {r[\"url\"]}')
+"
+```
+
+> Codex 和 Claude Code 都支持执行 Python 和 Shell 命令，两种方式都可以。
+
+### 任何 Python 进程
 
 ```python
 from router import SearchRouter
 
 router = SearchRouter()
 
-# 基础搜索（自动路由到最优 Provider）
-result = router.search("AI news today", num_results=10)
+# 通用搜索
+result = router.search("搜索词", num_results=10)
 print(f"使用了: {result['provider']}")
-for r in result["results"]:
-    print(f"  {r['title']}: {r['url']}")
 
-# 指定场景（显式路由）
-result = router.search("小型语言模型 2026", query_type="research", num_results=10)
+# 指定场景
+result = router.search("搜索词", query_type="research", num_results=10)
 
-# 多 Provider 对比（同时跑所有可用 Provider）
-results = router.search_with_fallback("搜索工具对比")
+# 多 Provider 对比
+results = router.search_with_fallback("搜索词")
 for r in results:
     print(f"[{r['provider']}] {r['total']}条结果, 耗时{r['latency_ms']}ms")
+
+# 查看各 Provider 状态
+print(router.provider_status())
+
+# 运行时加 Key
+router.add_provider_key("tavily", "new-key")
+router.save_config()
 ```
 
-### 方式 3：终端脚本调用（适合 Hermes / Codex / Claude Code）
+### 为什么所有 Agent 都能用？
 
-```bash
-# 在任何 Agent 的 terminal 里
-python ~/.hermes/scripts/search.py "搜索词" -t research -n 10 -f json
-```
-
-### 方式 4：execute_code / subprocess 调用
-
-```python
-import subprocess, json
-
-result = subprocess.run(
-    ["python3", "router.py", "搜索词", "research", "10"],
-    capture_output=True, text=True, timeout=30
-)
-# 遗憾的是 router.py 的 CLI 输出是格式化文本，不是 JSON
-# 要 JSON 输出建议用 Python import 方式
-```
-
----
-
-## 支持哪些 Agent
-
-| Agent | 能用吗 | 怎么用 |
-|-------|--------|--------|
-| **Hermes Agent** | ✅ 原生支持 | 作为 skill 加载自动路由；或用 `terminal("python router.py ...")` |
-| **OpenClaw** 子 Agent | ✅ 完全可用 | `terminal("python ~/.hermes/skills/research/search-router/router.py 'query'")` |
-| **Codex CLI** | ✅ 完全可用 | `python -c "from router import SearchRouter; r=SearchRouter(); print(r.search('query')['results'])"` |
-| **Claude Code** | ✅ 完全可用 | 同上，纯 Python 调用，无框架依赖 |
-| **任何 Python 3 进程** | ✅ 完全可用 | `pip install requests` + `import` 即可，无需安装任何 Agent 框架 |
-
-**为什么都能用？** SearchRouter 是纯 Python 3 标准库实现，唯一的第三方依赖是 `requests`。它不依赖 Hermes 的 tool calling、不依赖 OpenClaw 的进程管理、不绑定任何 Agent 框架——就是一个搜索 API 的封装层。只要能装 `requests` 就能跑。
+SearchRouter 是纯 Python 3 实现，唯一第三方依赖是 `requests`。它不依赖 Hermes 的 tool calling、不依赖 OpenClaw 的进程管理、不绑定任何 Agent 框架——就是一个搜索 API 的封装层。**只要能 `pip install requests` 就能跑。**
 
 ---
 
@@ -418,18 +411,6 @@ search-router/
     ├── exa.py                # Exa 深度搜索 API 实现
     └── brave.py              # Brave 搜索 API 实现
 ```
-
----
-
-## 与其他方案对比
-
-| | Search Router | 直接用单个 Provider | 手动切换 |
-|---|---|---|---|
-| **配置一次** | ✅ 多 Key 自动轮换 | ❌ Key 用尽要手动换 | ❌ 每个工具都要单独配 |
-| **智能路由** | ✅ 按场景自动选最优 | ❌ 什么场景都是同一个 | ❌ 要记住哪个场景用哪个 |
-| **自动降级** | ✅ 主 Provider 失效自动切下一个 | ❌ 失败就停 | ❌ 自己判断 + 手动切 |
-| **统一格式** | ✅ 换 Provider 不改代码 | ✅ 单一格式 | ❌ 每个 Provider 格式不同 |
-| **多 Agent 兼容** | ✅ Hermes/OpenClaw/Codex/Claude Code 都能用 | 取决于封装方式 | ❌ 每个 Agent 要单独配 |
 
 ---
 
