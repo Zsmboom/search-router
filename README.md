@@ -41,26 +41,11 @@ pip install requests
 
 ## 配置 API Key
 
-每个搜索渠道都需要注册获取 Key。最少配一个（推荐 Tavily），配多个有容灾。
+你只需要做两件事：**注册获取 Key，然后告诉 Agent 去配置**。
 
-```bash
-cp config.json.template config.json
-```
+### 第一步：注册获取 Key
 
-编辑 `config.json`，填入你的 Key：
-
-```json
-{
-  "providers": {
-    "tavily": {
-      "enabled": true,
-      "keys": ["tvly-你的key"]
-    }
-  }
-}
-```
-
-### 各渠道 Key 获取
+最少注册一个（推荐 Tavily），注册多个有容灾。
 
 | 渠道 | 注册地址 | 免费额度 | 适合搜什么 |
 |------|---------|---------|-----------|
@@ -69,14 +54,16 @@ cp config.json.template config.json
 | **Exa** | [exa.ai](https://exa.ai) | 1000次/月 | 深度研究、长文、学术 |
 | **Brave** | [brave.com/search/api](https://brave.com/search/api) | 2000次/月 | 通用搜索、隐私场景 |
 
-> ⚠️ `config.json` 含 API Key，已加入 `.gitignore`，不会提交到 Git。
+### 第二步：让 Agent 配置
 
-如果你不想改配置文件，也可以用环境变量注入 Key：
+把 Key 给 Agent，说一句就行：
 
-```bash
-export SEARCH_TAVILY_KEYS="你的key"
-export SEARCH_EXA_KEYS="你的key"
-```
+> "帮我配一下 search-router 的 API Key，Tavily 的 Key 是 tvly-xxx，Serper 的 Key 是 xxxx"
+
+Agent 会自动写入 `config.json`。之后你还可以随时追加或更换 Key：
+
+> "再加一个 Tavily 的 Key：tvly-yyy"
+> "把 Serper 的 Key 换成 xxxx"
 
 ---
 
@@ -151,7 +138,7 @@ Agent 会按相关性排列，每条结果附来源链接。示例输出：
 ## 常见问题
 
 **Q：Key 用完了怎么办？**
-A：回到官网重新注册一个 Key，加到 `config.json` 的 `keys` 数组里就行。配了多个 Provider 的话，一个用尽会自动切到下一个。
+A：回到官网重新注册一个新 Key，然后告诉 Agent："加一个 Tavily 的 Key：tvly-xxx"。配了多个渠道的话，一个用尽会自动切到下一个。
 
 **Q：怎么知道当前配了几个 Key、状态如何？**
 A：跟 Agent 说"查一下 search-router 的 Provider 状态"。
